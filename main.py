@@ -17,6 +17,9 @@ class ServerOSBot(commands.Bot):
         )
 
     async def setup_hook(self):
+        # إنشاء مجلد cogs تلقائياً إذا لم يكن موجوداً لتجنب خطأ الاستضافة
+        os.makedirs("./cogs", exist_ok=True)
+
         # تحميل جميع ملفات الأوامر (Cogs) تلقائياً من مجلد cogs
         for filename in os.listdir("./cogs"):
             if filename.endswith(".py"):
