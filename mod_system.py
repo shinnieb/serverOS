@@ -12,7 +12,6 @@ class Moderation(commands.Cog):
     def init_db(self):
         conn = sqlite3.connect("serveros.db")
         cursor = conn.cursor()
-        # جدول التحذيرات
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS warnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +22,6 @@ class Moderation(commands.Cog):
                 date TEXT
             )
         """)
-        # جدول الملاحظات الإدارية
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS member_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +35,7 @@ class Moderation(commands.Cog):
         conn.commit()
         conn.close()
 
-    # --- 1. أمر إعطاء تحذير ---
+    # --- 1. أمر إعطاء تحذير (إداري فقط) ---
     @app_commands.command(name="تحذير", description="[إداري] إعطاء تحذير رسمي لعضو وتسجيله في النظام")
     @app_commands.describe(عضو="العضو المراد تحذيره", السبب="سبب التحذير")
     @app_commands.default_permissions(manage_guild=True)
@@ -61,7 +59,6 @@ class Moderation(commands.Cog):
         warn_count = cursor.fetchone()[0]
         conn.close()
 
-        # إرسال إشعار بالخاص للعضو المخالف فقط
         try:
             dm_embed = discord.Embed(
                 title="⚠️ تنبيه إداري رسمي",
@@ -81,7 +78,7 @@ class Moderation(commands.Cog):
         embed.set_footer(text="ServerOS • Developed by i5z_w")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # --- 2. أمر إضافة ملاحظة إدارية ---
+    # --- 2. أمر إضافة ملاحظة إدارية (إداري فقط) ---
     @app_commands.command(name="ملاحظة", description="[إداري] إضافة ملاحظة سرية على العضو خاصة بالإدارة")
     @app_commands.describe(عضو="العضو المراد إضافة ملاحظة له", الملاحظة="نص الملاحظة الإدارية")
     @app_commands.default_permissions(manage_guild=True)
@@ -110,19 +107,27 @@ class Moderation(commands.Cog):
         embed.set_footer(text="ServerOS • Developed by i5z_w")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # --- 3. الملف الشامل (تحذيرات + ملاحظات) ---
-    @app_commands.command(name="سجل_العضو", description="[إداري] استعراض السجل الشامل للعضو (التحذيرات والملاحظات)")
-    @app_commands.describe(عضو="العضو المراد استعراض سجله")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def member_profile(self, interaction: discord.Interaction, عضو: discord.Member):
+    # --- 3. الملف الشامل (متاح للجميع لسحب السجل، وإذا لم تحدد عضو يعرض سجلك أنت) ---
+    @app_commands.command(name="سجل_العضو", description="استعراض السجل الشامل (التحذيرات والملاحظات)")
+    @app_commands.describe(عضو="العضو المراد استعراض سجله (اتركه فارغاً لعرض سجلك الشخصي)")
+    async def member_profile(self, interaction: discord.Interaction, عضو: discord.Member = None):
+        # إذا لم يحدد العضو شخصاً معيناً، يتم عرض سجله الشخصي تلقائياً
+        target_member = عضو if عضو else interaction.user
+        
+        # تحقق إضافي: لو كان العضو العادي يحاول يشاهد سجل شخص *آخر*، نمنعه (إلا إذا كان إدارياً)
+        is_admin = interaction.user.guild_permissions.manage_guild
+        if target_member.id != interaction.user.id and not is_admin:
+            await interaction.response.send_message("❌ لا يمكنك استعراض سجل الأعضاء الآخرين!", ephemeral=True)
+            return
+
         conn = sqlite3.connect("serveros.db")
         cursor = conn.cursor()
         
-        cursor.execute("SELECT id, moderator_id, reason, date FROM warnings WHERE guild_id = ? AND user_id = ?", (interaction.guild_id, عضو.id))
+        cursor.execute("SELECT id, moderator_id, reason, date FROM warnings WHERE guild_id = ? AND user_id = ?", (interaction.guild_id, target_member.id))
         warnings_rows = cursor.fetchall()
         
-        cursor.execute("SELECT id, moderator_id, note, date FROM member_notes WHERE guild_id = ? AND user_id = ?", (interaction.guild_id, عضو.id))
+        # الملاحظات تظهر فقط للإدارة لحفاظ السرية، أو لصاحب السجل إذا رغبت (هنا جعلناها تظهر للإدارة فقط أو لصاحب الحساب إن شئت، جعلناها متاحة للشخص نفسه وللإدارة)
+        cursor.execute("SELECT id, moderator_id, note, date FROM member_notes WHERE guild_id = ? AND user_id = ?", (interaction.guild_id, target_member.id))
         notes_rows = cursor.fetchall()
         
         conn.close()
@@ -133,32 +138,38 @@ class Moderation(commands.Cog):
         else:
             for idx, (warn_id, mod_id, reason, date) in enumerate(warnings_rows, start=1):
                 mod = interaction.guild.get_member(mod_id)
-                mod_name = mod.mention if mod else f"مشرف (ID: {mod_id})"
-                warnings_text += f"**{idx}.** (ID: `{warn_id}`) {reason}\n ↳ بواسطة: {mod_name} | `{date}`\n"
+                mod_name = mod.mention if mod else f"مشرف"
+                warnings_text += f"**{idx}.** {reason}\n ↳ التاريخ: `{date}`\n"
 
+        # ملاحظات الإدارة لا تظهر للعضو العادي حماية للسرية، تظهر فقط لو كان المشرف هو اللي يستعرض
         notes_text = ""
-        if not notes_rows:
-            notes_text = "✨ لا توجد ملاحظات إدارية."
+        if not is_admin:
+            notes_text = "🔒 الملاحظات الإدارية مخفية."
         else:
-            for idx, (note_id, mod_id, note, date) in enumerate(notes_rows, start=1):
-                mod = interaction.guild.get_member(mod_id)
-                mod_name = mod.mention if mod else f"مشرف (ID: {mod_id})"
-                notes_text += f"**{idx}.** (ID: `{note_id}`) {note}\n ↳ بواسطة: {mod_name} | `{date}`\n"
+            if not notes_rows:
+                notes_text = "✨ لا توجد ملاحظات إدارية."
+            else:
+                for idx, (note_id, mod_id, note, date) in enumerate(notes_rows, start=1):
+                    mod = interaction.guild.get_member(mod_id)
+                    mod_name = mod.mention if mod else f"مشرف (ID: {mod_id})"
+                    notes_text += f"**{idx}.** (ID: `{note_id}`) {note}\n ↳ بواسطة: {mod_name} | `{date}`\n"
 
         embed = discord.Embed(
-            title=f"📁 الملف الشامل للعضو: {عضو.display_name}",
-            description=f"👤 **العضو:** {عضو.mention} (`{عضو.id}`)\n",
+            title=f"📁 الملف الشامل للعضو: {target_member.display_name}",
+            description=f"👤 **العضو:** {target_member.mention}\n",
             color=0x2b2d31
         )
         embed.add_field(name=f"⚠️ التحذيرات ({len(warnings_rows)})", value=warnings_text, inline=False)
-        embed.add_field(name=f"📝 الملاحظات الإدارية ({len(notes_rows)})", value=notes_text, inline=False)
         
-        embed.set_thumbnail(url=عضو.display_avatar.url)
+        if is_admin:
+            embed.add_field(name=f"📝 الملاحظات الإدارية ({len(notes_rows)})", value=notes_text, inline=False)
+        
+        embed.set_thumbnail(url=target_member.display_avatar.url)
         embed.set_footer(text="ServerOS • Developed by i5z_w")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # --- 4. تصفير التحذيرات ---
+    # --- 4. تصفير التحذيرات (إداري فقط) ---
     @app_commands.command(name="مسح_تحذيرات", description="[إداري] مسح وإزالة جميع تحذيرات عضو معين")
     @app_commands.describe(عضو="العضو المراد تصفير سجله")
     @app_commands.default_permissions(manage_guild=True)
