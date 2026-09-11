@@ -3,6 +3,31 @@ from discord.ext import commands
 from discord import app_commands
 import sqlite3
 
+class RepliesPaginator(discord.ui.View):
+    def __init__(self, pages):
+        super().__init__(timeout=180)
+        self.pages = pages
+        self.current_page = 0
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.prev_button.disabled = self.current_page == 0
+        self.next_button.disabled = self.current_page == len(self.pages) - 1
+
+    @discord.ui.button(label="السابق ◀", style=discord.ButtonStyle.blurple)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+
+    @discord.ui.button(label="التالي ▶", style=discord.ButtonStyle.blurple)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < len(self.pages) - 1:
+            self.current_page += 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+
 class AutoReplies(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -103,7 +128,7 @@ class AutoReplies(commands.Cog):
         embed.set_footer(text="ServerOS Pro • Developed by i5z_w")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="عرض_الردود_المحفوظة", description="[إداري] عرض قائمة جميع الردود التلقائية المحفوظة في السيرفر")
+    @app_commands.command(name="عرض_الردود_المحفوظة", description="[إداري] عرض قائمة جميع الردود التلقائية المحفوظة في السيرفر عبر صفحة تفاعلية")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def show_saved_replies(self, interaction: discord.Interaction):
         conn = sqlite3.connect("serveros.db")
@@ -115,25 +140,36 @@ class AutoReplies(commands.Cog):
         if not rows:
             embed = discord.Embed(
                 title="📜 الردود التلقائية المحفوظة",
-                description="عذراً، لا توجد أي ردود تلقائية مسجلة في هذا السيرفر حالياً.\nيمكنك إضافة رد جديد عبر أمر `/اضافة_رد`.",
+                description="عذراً، لا توجد أي ردود تلقائية مسجلة في هذا السيرفر حالياً.",
                 color=discord.Color.orange()
             )
             embed.set_footer(text="ServerOS Pro • Developed by i5z_w")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        description = ""
-        for idx, (trigger, response, should_mention) in enumerate(rows, start=1):
-            mention_status = "🔔 منشن مفعل" if should_mention == 1 else "🔕 بدون منشن"
-            description += f"**{idx}.** الكلمة: `{trigger}`\n ↳ الرد: {response} (`{mention_status}`)\n\n"
+        # تقسيم الردود إلى صفحات (كل 5 ردود في صفحة لضمان شكل فخم ونظيف)
+        items_per_page = 5
+        chunks = [rows[i:i + items_per_page] for i in range(0, len(rows), items_per_page)]
+        pages = []
 
-        embed = discord.Embed(
-            title="📜 قائمة الردود التلقائية المحفوظة",
-            description=description,
-            color=0x2b2d31
-        )
-        embed.set_footer(text=f"إجمالي الردود المخزنة: {len(rows)} • Developed by i5z_w")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        for index, chunk in enumerate(chunks, start=1):
+            description = ""
+            for idx, (trigger, response, should_mention) in enumerate(chunk, start=1):
+                global_idx = (index - 1) * items_per_page + idx
+                mention_status = "🔔 منشن مفعل" if should_mention == 1 else "🔕 بدون منشن"
+                description += f"**{global_idx}.** الكلمة: `{trigger}`\n ↳ الرد: {response} (`{mention_status}`)\n\n"
+
+            embed = discord.Embed(
+                title="📜 قائمة الردود التلقائية المحفوظة",
+                description=description,
+                color=0x2b2d31
+            )
+            embed.set_footer(text=f"الصفحة {index} من {len(chunks)} • إجمالي الردود: {len(rows)} • Developed by i5z_w")
+            pages.append(embed)
+
+        view = RepliesPaginator(pages)
+        # تم جعل الرسالة تظهر للجميع في الروم (ephemeral=False)
+        await interaction.response.send_message(embed=pages[0], view=view, ephemeral=False)
 
 async def setup(bot):
     await bot.add_cog(AutoReplies(bot))
