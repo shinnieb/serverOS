@@ -20,14 +20,6 @@ class AutoReplies(commands.Cog):
                 PRIMARY KEY (guild_id, trigger)
             )
         """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS deleted_replies (
-                guild_id INTEGER,
-                trigger TEXT,
-                response TEXT,
-                deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
         conn.commit()
         conn.close()
 
@@ -49,7 +41,7 @@ class AutoReplies(commands.Cog):
             else:
                 await message.channel.send(response)
 
-    @app_commands.command(name="اضافة_رد", description="إضافة رد تلقائي جديد للكلمات")
+    @app_commands.command(name="اضافة_رد", description="[إداري] إضافة رد تلقائي جديد للكلمات في السيرفر")
     @app_commands.describe(
         trigger="الكلمة أو الجملة التي يكتبها العضو",
         response="رد البوت عليها",
@@ -59,6 +51,7 @@ class AutoReplies(commands.Cog):
         app_commands.Choice(name="نعم (يمنشن)", value=1),
         app_commands.Choice(name="لا (بدون منشن)", value=0)
     ])
+    @app_commands.checks.has_permissions(manage_guild=True)
     async def add_reply(self, interaction: discord.Interaction, trigger: str, response: str, mention: app_commands.Choice[int]):
         conn = sqlite3.connect("serveros.db")
         cursor = conn.cursor()
@@ -73,14 +66,16 @@ class AutoReplies(commands.Cog):
         conn.close()
 
         embed = discord.Embed(
-            title="✅ تم إضافة الرد التلقائي",
-            description=f"💬 **الكلمة:** `{trigger}`\n🗣️ **الرد:** {response}\n🔔 **المنشن:** {'مفعل' if mention.value == 1 else 'معطل'}",
-            color=discord.Color.green()
+            title="✨ تم إضافة/تحديث الرد التلقائي بنجاح",
+            description=f"💬 **الكلمة المُحفزة:** `{trigger}`\n🗣️ **رد البوت:** {response}\n🔔 **حالة المنشن:** `{'مفعل ✅' if mention.value == 1 else 'معطل ❌'}`",
+            color=0x2b2d31
         )
+        embed.set_footer(text="ServerOS Pro • Developed by i5z_w")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="حذف_رد", description="حذف رد تلقائي موجود")
-    @app_commands.describe(trigger="الكلمة المراد حذف ردها")
+    @app_commands.command(name="حذف_رد", description="[إداري] حذف رد تلقائي موجود مسبقاً")
+    @app_commands.describe(trigger="الكلمة المراد حذف ردها التلقائي")
+    @app_commands.checks.has_permissions(manage_guild=True)
     async def delete_reply(self, interaction: discord.Interaction, trigger: str):
         conn = sqlite3.connect("serveros.db")
         cursor = conn.cursor()
@@ -88,38 +83,56 @@ class AutoReplies(commands.Cog):
         row = cursor.fetchone()
 
         if row:
-            cursor.execute("INSERT INTO deleted_replies (guild_id, trigger, response) VALUES (?, ?, ?)", (interaction.guild_id, trigger.strip(), row[0]))
             cursor.execute("DELETE FROM auto_replies WHERE guild_id = ? AND trigger = ?", (interaction.guild_id, trigger.strip()))
             conn.commit()
             conn.close()
-            embed = discord.Embed(title="🗑️ تم حذف الرد", description=f"تم حذف الرد الخاص بكلمة: `{trigger}` بنجاح.", color=discord.Color.red())
+            
+            embed = discord.Embed(
+                title="🗑️ تم حذف الرد التلقائي", 
+                description=f"تمت إزالة الرد الخاص بالكلمة: `{trigger}` من قاعدة البيانات بنجاح.", 
+                color=discord.Color.red()
+            )
         else:
             conn.close()
-            embed = discord.Embed(title="❌ غير موجود", description=f"لم يتم العثور على رد تلقائي للكلمة: `{trigger}`", color=discord.Color.orange())
+            embed = discord.Embed(
+                title="❌ غير موجود", 
+                description=f"لم يتم العثور على أي رد تلقائي مسجل للكلمة: `{trigger}`", 
+                color=discord.Color.orange()
+            )
 
+        embed.set_footer(text="ServerOS Pro • Developed by i5z_w")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="الردود_المحذوفة", description="عرض الأرشيف الخاص بالردود المحذوفة")
-    async def show_deleted_replies(self, interaction: discord.Interaction):
+    @app_commands.command(name="عرض_الردود_المحفوظة", description="[إداري] عرض قائمة جميع الردود التلقائية المحفوظة في السيرفر")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def show_saved_replies(self, interaction: discord.Interaction):
         conn = sqlite3.connect("serveros.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT trigger, response, deleted_at FROM deleted_replies WHERE guild_id = ? ORDER BY deleted_at DESC LIMIT 10", (interaction.guild_id,))
+        cursor.execute("SELECT trigger, response, should_mention FROM auto_replies WHERE guild_id = ?", (interaction.guild_id,))
         rows = cursor.fetchall()
         conn.close()
 
         if not rows:
-            await interaction.response.send_message("📜 لا يوجد ردود محذوفة في الأرشيف حالياً.", ephemeral=True)
+            embed = discord.Embed(
+                title="📜 الردود التلقائية المحفوظة",
+                description="عذراً، لا توجد أي ردود تلقائية مسجلة في هذا السيرفر حالياً.\nيمكنك إضافة رد جديد عبر أمر `/اضافة_رد`.",
+                color=discord.Color.orange()
+            )
+            embed.set_footer(text="ServerOS Pro • Developed by i5z_w")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         description = ""
-        for trigger, response, deleted_at in rows:
-            description += f"• **الكلمة:** `{trigger}` | **الرد:** `{response}` | ⏱️ `{deleted_at}`\n"
+        for idx, (trigger, response, should_mention) in enumerate(rows, start=1):
+            mention_status = "🔔 منشن مفعل" if should_mention == 1 else "🔕 بدون منشن"
+            description += f"**{idx}.** الكلمة: `{trigger}`\n ↳ الرد: {response} (`{mention_status}`)\n\n"
 
         embed = discord.Embed(
-            title="📜 أرشيف الردود المحذوفة (آخر 10)",
+            title="📜 قائمة الردود التلقائية المحفوظة",
             description=description,
-            color=discord.Color.gold()
+            color=0x2b2d31
         )
+        embed.set_footer(text=f"إجمالي الردود المخزنة: {len(rows)} • Developed by i5z_w")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
