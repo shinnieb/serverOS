@@ -107,15 +107,13 @@ class Moderation(commands.Cog):
         embed.set_footer(text="ServerOS • Developed by i5z_w")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # --- 3. الملف الشامل (متاح للجميع لسحب السجل، وإذا لم تحدد عضو يعرض سجلك أنت) ---
+    # --- 3. سجل العضو (متاح للجميع وبرد سري مخفي عن الآخرين) ---
     @app_commands.command(name="سجل_العضو", description="استعراض السجل الشامل (التحذيرات والملاحظات)")
     @app_commands.describe(عضو="العضو المراد استعراض سجله (اتركه فارغاً لعرض سجلك الشخصي)")
     async def member_profile(self, interaction: discord.Interaction, عضو: discord.Member = None):
-        # إذا لم يحدد العضو شخصاً معيناً، يتم عرض سجله الشخصي تلقائياً
         target_member = عضو if عضو else interaction.user
-        
-        # تحقق إضافي: لو كان العضو العادي يحاول يشاهد سجل شخص *آخر*، نمنعه (إلا إذا كان إدارياً)
         is_admin = interaction.user.guild_permissions.manage_guild
+        
         if target_member.id != interaction.user.id and not is_admin:
             await interaction.response.send_message("❌ لا يمكنك استعراض سجل الأعضاء الآخرين!", ephemeral=True)
             return
@@ -126,7 +124,6 @@ class Moderation(commands.Cog):
         cursor.execute("SELECT id, moderator_id, reason, date FROM warnings WHERE guild_id = ? AND user_id = ?", (interaction.guild_id, target_member.id))
         warnings_rows = cursor.fetchall()
         
-        # الملاحظات تظهر فقط للإدارة لحفاظ السرية، أو لصاحب السجل إذا رغبت (هنا جعلناها تظهر للإدارة فقط أو لصاحب الحساب إن شئت، جعلناها متاحة للشخص نفسه وللإدارة)
         cursor.execute("SELECT id, moderator_id, note, date FROM member_notes WHERE guild_id = ? AND user_id = ?", (interaction.guild_id, target_member.id))
         notes_rows = cursor.fetchall()
         
@@ -137,11 +134,8 @@ class Moderation(commands.Cog):
             warnings_text = "✨ لا توجد تحذيرات مسجلة."
         else:
             for idx, (warn_id, mod_id, reason, date) in enumerate(warnings_rows, start=1):
-                mod = interaction.guild.get_member(mod_id)
-                mod_name = mod.mention if mod else f"مشرف"
                 warnings_text += f"**{idx}.** {reason}\n ↳ التاريخ: `{date}`\n"
 
-        # ملاحظات الإدارة لا تظهر للعضو العادي حماية للسرية، تظهر فقط لو كان المشرف هو اللي يستعرض
         notes_text = ""
         if not is_admin:
             notes_text = "🔒 الملاحظات الإدارية مخفية."
@@ -151,7 +145,7 @@ class Moderation(commands.Cog):
             else:
                 for idx, (note_id, mod_id, note, date) in enumerate(notes_rows, start=1):
                     mod = interaction.guild.get_member(mod_id)
-                    mod_name = mod.mention if mod else f"مشرف (ID: {mod_id})"
+                    mod_name = mod.mention if mod else f"مشرف"
                     notes_text += f"**{idx}.** (ID: `{note_id}`) {note}\n ↳ بواسطة: {mod_name} | `{date}`\n"
 
         embed = discord.Embed(
