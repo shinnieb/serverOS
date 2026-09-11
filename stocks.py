@@ -96,7 +96,7 @@ class ServerStocks(commands.Cog):
             ON CONFLICT(guild_id, user_id) DO UPDATE SET weekly_score = weekly_score + 1
         """, (message.guild.id, message.author.id))
 
-        # 4. منح رتبة "مستثمر" العامة تلقائياً لمن يرسل رسالة (إن وجدت مضافة في الإعدادات)
+        # 4. منح رتبة "مستثمر" العامة تلقائياً لمن يرسل رسالة
         cursor.execute("SELECT investor_role_id FROM market_roles WHERE guild_id = ?", (message.guild.id,))
         role_row = cursor.fetchone()
         
@@ -254,19 +254,19 @@ class ServerStocks(commands.Cog):
 
     @app_commands.command(name="إعداد_رتب_السوق", description="[خاص بالإداريين] تحديد رتب المستثمرين والرتب الخاصة بأوائل الأسبوع")
     @app_commands.describe(
-        rطبة_مستثمر="الرتبة التي تُمنح لأي شخص يتفاعل بالرسائل",
+        رتبة_مستثمر="الرتبة التي تُمنح لأي شخص يتفاعل بالرسائل",
         رتبة_مستثمر_كبير="الرتبة التي تُمنح لأكبر 3 مستثمرين بالأسبوع",
         رتبة_ملك_المستثمرين="الرتبة الخاصة بالمركز الأول (ملك المستثمرين)"
     )
     @app_commands.checks.has_permissions(moderate_members=True)
-    async def set_market_roles(self, interaction: discord.Interaction, رطبة_مستثمر: discord.Role = None, رتبة_مستثمر_كبير: discord.Role = None, رتبة_ملك_المستثمرين: discord.Role = None):
+    async def set_market_roles(self, interaction: discord.Interaction, رتبة_مستثمر: discord.Role = None, رتبة_مستثمر_كبير: discord.Role = None, رتبة_ملك_المستثمرين: discord.Role = None):
         conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
         
         cursor.execute("SELECT investor_role_id, top3_role_id, king_role_id FROM market_roles WHERE guild_id = ?", (interaction.guild.id,))
         existing = cursor.fetchone()
 
-        inv_id = رطبة_مستثمر.id if رطبة_مستثمر else (existing[0] if existing else None)
+        inv_id = رتبة_مستثمر.id if رتبة_مستثمر else (existing[0] if existing else None)
         top3_id = رتبة_مستثمر_كبير.id if رتبة_مستثمر_كبير else (existing[1] if existing else None)
         king_id = رتبة_ملك_المستثمرين.id if رتبة_ملك_المستثمرين else (existing[2] if existing else None)
 
@@ -281,7 +281,7 @@ class ServerStocks(commands.Cog):
         embed = discord.Embed(
             title="⚙️ إعدادات رتب السوق والتمويل",
             description="✅ تم حفظ وتحديث رتب السوق بنجاح:\n\n"
-                        f"• رتبة المتفاعل العادي: {rطبة_مستثمر.mention if رطبة_مستثمر else 'لم تُتغير'}\n"
+                        f"• رتبة المتفاعل العادي: {رتبة_مستثمر.mention if رتبة_مستثمر else 'لم تُتغير'}\n"
                         f"• رتبة أكبر 3 مستثمرين: {رتبة_مستثمر_كبير.mention if رتبة_مستثمر_كبير else 'لم تُتغير'}\n"
                         f"• رتبة ملك المستثمرين (#1): {رتبة_ملك_المستثمرين.mention if رتبة_ملك_المستثمرين else 'لم تُتغير'}",
             color=0x2ECC71
@@ -384,7 +384,7 @@ class ServerStocks(commands.Cog):
                 if not member:
                     continue
                 
-                # الأول يحصل على رتبة ملك المستثمرين ورتبة مستثمر كبير
+                # الأول يحصل على رتبة ملك المستثمرين
                 if index == 0:
                     if king_role:
                         try:
