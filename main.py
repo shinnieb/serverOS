@@ -29,16 +29,12 @@ class ServerOSBot(commands.Bot):
                 except Exception as e:
                     print(f"فشل تحميل الملف {cog_name}: {e}")
 
-        # مزامنة الأوامر مع السيرفر المحدد المكتوب في config.py
-        if hasattr(config, 'TARGET_GUILD_ID') and config.TARGET_GUILD_ID:
-            guild = discord.Object(id=config.TARGET_GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            print(f"تمت مزامنة الأوامر بنجاح مع السيرفر: {config.TARGET_GUILD_ID}")
-        else:
-            # مزامنة عامة في حال عدم تحديد سيرفر
+        # مزامنة عامة تلقائية لجميع السيرفرات بدون الحاجة لـ ID محدد
+        try:
             await self.tree.sync()
-            print("تمت مزامنة الأوامر عاماً مع جميع السيرفرات")
+            print("تمت مزامنة الأوامر عاماً مع جميع السيرفرات بنجاح!")
+        except Exception as e:
+            print(f"فشل في مزامنة الأوامر: {e}")
 
     async def on_ready(self):
         print(f"البوت جاهز ويعمل باسم : {self.user}")
