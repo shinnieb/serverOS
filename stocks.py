@@ -78,7 +78,7 @@ class ServerStocks(commands.Cog):
         conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
 
-        # 1. إعطاء نقاط تفاعل لكل رسالة (10 نقاط) وتأكيد الحفظ
+        # 1. إعطاء نقاط تفاعل ورصيد لكل رسالة (10 نقاط) وتأكيد الحفظ
         cursor.execute("""
             INSERT INTO user_wallet (guild_id, user_id, balance) VALUES (?, ?, 500)
             ON CONFLICT(guild_id, user_id) DO UPDATE SET balance = balance + 10
@@ -252,11 +252,11 @@ class ServerStocks(commands.Cog):
 
         await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
-    @app_commands.command(name="إعداد_رتب_السوق", description="[خاص بالإداريين] تحديد رتب المستثمرين والرتب الخاصة بأوائل الأسبوع")
+    @app_commands.command(name="إعداد_رتب_السوق", description="[خاص بالإداريين] تحديد رتب المستثمرين والرتب الخاصة بأوائل الأثرياء والسيرفر")
     @app_commands.describe(
-        رتبة_مستثمر="الرتبة التي تُمنح لأي شخص يتفاعل بالرسائل",
-        رتبة_مستثمر_كبير="الرتبة التي تُمنح لأكبر 3 مستثمرين بالأسبوع",
-        رتبة_ملك_المستثمرين="الرتبة الخاصة بالمركز الأول (ملك المستثمرين)"
+        رتبة_مستثمر="الرتبة العامة التي تُمنح لأي شخص يتفاعل",
+        رتبة_مستثمر_كبير="رتبة كبار المستثمرين (لأكبر 3 أرصدة بالسيرفر)",
+        رتبة_ملك_المستثمرين="رتبة ملك المستثمرين (لصاحب المركز الأول والمركز المالي الأعلى)"
     )
     @app_commands.checks.has_permissions(moderate_members=True)
     async def set_market_roles(self, interaction: discord.Interaction, رتبة_مستثمر: discord.Role = None, رتبة_مستثمر_كبير: discord.Role = None, رتبة_ملك_المستثمرين: discord.Role = None):
@@ -278,11 +278,14 @@ class ServerStocks(commands.Cog):
         conn.commit()
         conn.close()
 
+        # تحديث فوري للرتب عند حفظ الإعدادات لتطبيقها مباشرة على الأثرياء الحاليين
+        await self.update_wealth_roles(interaction.guild)
+
         embed = discord.Embed(
             title="⚙️ إعدادات رتب السوق والتمويل",
-            description="✅ تم حفظ وتحديث رتب السوق بنجاح:\n\n"
+            description="✅ تم حفظ وتطبيق رتب السوق بنجاح:\n\n"
                         f"• رتبة المتفاعل العادي: {رتبة_مستثمر.mention if رتبة_مستثمر else 'لم تُتغير'}\n"
-                        f"• رتبة أكبر 3 مستثمرين: {رتبة_مستثمر_كبير.mention if رتبة_مستثمر_كبير else 'لم تُتغير'}\n"
+                        f"• رتبة كبار المستثمرين (Top 3): {رتبة_مستثمر_كبير.mention if رتبة_مستثمر_كبير else 'لم تُتغير'}\n"
                         f"• رتبة ملك المستثمرين (#1): {رتبة_ملك_المستثمرين.mention if رتبة_ملك_المستثمرين else 'لم تُتغير'}",
             color=0x2ECC71
         )
@@ -324,12 +327,67 @@ class ServerStocks(commands.Cog):
         else:
             await interaction.response.send_message("❌ حدث خطأ أثناء تنفيذ الأمر الإداري.", ephemeral=True)
 
+    async def update_wealth_roles(self, guild: discord.Guild):
+        """دالة مسؤولة عن منح وسحب رتب الثروة (الملك وكبار المستثمرين) بناءً على الأرصدة الحالية بدقة"""
+        conn = sqlite3.connect("serveros_pro.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT top3_role_id, king_role_id FROM market_roles WHERE guild_id = ?", (guild.id,))
+        role_row = cursor.fetchone()
+        conn.close()
+
+        if not role_row:
+            return
+
+        top3_role_id, king_role_id = role_row
+        top3_role = guild.get_role(top3_role_id) if top3_role_id else None
+        king_role = guild.get_role(king_role_id) if king_role_id else None
+
+        # سحب الرتب القديمة أولاً لتحديثها نظيفة
+        if top3_role:
+            for member in top3_role.members:
+                try:
+                    await member.remove_roles(top3_role)
+                except Exception:
+                    pass
+        if king_role:
+            for member in king_role.members:
+                try:
+                    await member.remove_roles(king_role)
+                except Exception:
+                    pass
+
+        # جلب أكبر 3 أعضاء أصحاب أرصدة مالية في المحفظة
+        conn = sqlite3.connect("serveros_pro.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM user_wallet WHERE guild_id = ? ORDER BY balance DESC LIMIT 3", (guild.id,))
+        top_wealth = cursor.fetchall()
+        conn.close()
+
+        for index, (uid,) in enumerate(top_wealth):
+            member = guild.get_member(uid)
+            if not member:
+                continue
+            
+            # المركز الأول (أكبر رصيد مثل 100 ألف وأكثر) يصبح ملك المستثمرين
+            if index == 0 and king_role:
+                try:
+                    await member.add_roles(king_role, reason="الحصول على أعلى رصيد مالي وتصدر ملك المستثمرين")
+                except Exception:
+                    pass
+            
+            # أول 3 أثرياء يحصلون على رتبة كبار المستثمرين
+            if top3_role:
+                try:
+                    await member.add_roles(top3_role, reason="التواجد ضمن قائمة أكبر 3 مستثمرين وأثرياء السيرفر")
+                except Exception:
+                    pass
+
     @tasks.loop(hours=168)
     async def pay_dividends(self):
         conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
         
-        # 1. تحديث أسعار الأسهم وأرباح الرومات
+        # 1. تحديث أسعار الأسهم وأرباح الرومات وتوزيع الأرباح على المحافظ
         cursor.execute("SELECT guild_id, channel_id, messages_count FROM channel_stocks")
         channels = cursor.fetchall()
 
@@ -343,67 +401,14 @@ class ServerStocks(commands.Cog):
                 profit = shares * int(new_price * 0.15)
                 cursor.execute("UPDATE user_wallet SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (profit, guild_id, user_id))
 
-        # 2. منح وتنظيم رتب الأسبوع وتحديثها بناءً على الأرصدة والتفاعل الأسبوعي
-        cursor.execute("SELECT DISTINCT guild_id FROM weekly_stats")
-        guilds = cursor.fetchall()
-
-        for (guild_id,) in guilds:
-            guild = self.bot.get_guild(guild_id)
-            if not guild:
-                continue
-
-            cursor.execute("SELECT top3_role_id, king_role_id FROM market_roles WHERE guild_id = ?", (guild_id,))
-            role_row = cursor.fetchone()
-            if not role_row:
-                continue
-
-            top3_role_id, king_role_id = role_row
-            top3_role = guild.get_role(top3_role_id) if top3_role_id else None
-            king_role = guild.get_role(king_role_id) if king_role_id else None
-
-            # سحب الرتب القديمة من الأعضاء لتحديثها بالأسبوع الجديد
-            if top3_role:
-                for member in top3_role.members:
-                    try:
-                        await member.remove_roles(top3_role)
-                    except Exception:
-                        pass
-            if king_role:
-                for member in king_role.members:
-                    try:
-                        await member.remove_roles(king_role)
-                    except Exception:
-                        pass
-
-            # جلب أعلى 3 مستثمرين/أعضاء لهذا الأسبوع
-            cursor.execute("SELECT user_id FROM weekly_stats WHERE guild_id = ? ORDER BY weekly_score DESC LIMIT 3", (guild_id,))
-            top_users = cursor.fetchall()
-
-            for index, (uid,) in enumerate(top_users):
-                member = guild.get_member(uid)
-                if not member:
-                    continue
-                
-                # الأول يحصل على رتبة ملك المستثمرين
-                if index == 0:
-                    if king_role:
-                        try:
-                            await member.add_roles(king_role)
-                        except Exception:
-                            pass
-                
-                # الأول والثاني والثالث يحصلون على رتبة مستثمر كبير
-                if top3_role:
-                    try:
-                        await member.add_roles(top3_role)
-                    except Exception:
-                        pass
-
-        # تصفير النشاط الأسبوعي لبدء أسبوع جديد
+        # تصفير النشاط الأسبوعي
         cursor.execute("DELETE FROM weekly_stats")
-
         conn.commit()
         conn.close()
+
+        # تحديث رتب الثروة لجميع السيرفرات تلقائياً مع الأرباح الجديدة
+        for guild in self.bot.guilds:
+            await self.update_wealth_roles(guild)
 
     @pay_dividends.before_loop
     async def before_dividends(self):
