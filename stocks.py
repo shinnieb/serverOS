@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import sqlite3
-import random
+import datetime
 
 class ServerStocks(commands.Cog):
     def __init__(self, bot):
@@ -11,8 +11,9 @@ class ServerStocks(commands.Cog):
         self.pay_dividends.start()
 
     def init_db(self):
-        conn = sqlite3.connect("serveros.db")
+        conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
+        
         # جدول أرصدة الأعضاء
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_wallet (
@@ -22,6 +23,7 @@ class ServerStocks(commands.Cog):
                 PRIMARY KEY (guild_id, user_id)
             )
         """)
+        
         # جدول أسهم الرومات
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS channel_stocks (
@@ -32,6 +34,7 @@ class ServerStocks(commands.Cog):
                 PRIMARY KEY (guild_id, channel_id)
             )
         """)
+        
         # جدول محفظة أسهم الأعضاء
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_shares (
@@ -42,6 +45,18 @@ class ServerStocks(commands.Cog):
                 PRIMARY KEY (guild_id, user_id, channel_id)
             )
         """)
+
+        # جدول تتبع جوائز الأسبوع للمستثمرين
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS weekly_stats (
+                guild_id INTEGER,
+                user_id INTEGER,
+                weekly_score INTEGER DEFAULT 0,
+                last_reset TIMESTAMP,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        """)
+        
         conn.commit()
         conn.close()
 
@@ -50,10 +65,10 @@ class ServerStocks(commands.Cog):
         if message.author.bot or not message.guild:
             return
 
-        conn = sqlite3.connect("serveros.db")
+        conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
 
-        # 1. إعطاء نقاط لكل رسالة (10 نقاط) + تسجيل حساب جديد إذا مو موجود
+        # 1. إعطاء نقاط تفاعل لكل رسالة (10 نقاط) وتأكيد الحفظ
         cursor.execute("""
             INSERT INTO user_wallet (guild_id, user_id, balance) VALUES (?, ?, 500)
             ON CONFLICT(guild_id, user_id) DO UPDATE SET balance = balance + 10
@@ -65,74 +80,87 @@ class ServerStocks(commands.Cog):
             ON CONFLICT(guild_id, channel_id) DO UPDATE SET messages_count = messages_count + 1
         """, (message.guild.id, message.channel.id))
 
+        # 3. تحديث النقاط الأسبوعية للمتفاعل
+        cursor.execute("""
+            INSERT INTO weekly_stats (guild_id, user_id, weekly_score, last_reset) VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(guild_id, user_id) DO UPDATE SET weekly_score = weekly_score + 1
+        """, (message.guild.id, message.author.id))
+
         conn.commit()
         conn.close()
 
-    @app_commands.command(name="رصيدي", description="عرض رصيدك الحالي من النقاط")
+    @app_commands.command(name="رصيدي", description="عرض رصيدك الحالي من النقاط في الخزينة الملكية")
     async def balance(self, interaction: discord.Interaction):
-        conn = sqlite3.connect("serveros.db")
+        conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
         cursor.execute("SELECT balance FROM user_wallet WHERE guild_id = ? AND user_id = ?", (interaction.guild_id, interaction.user.id))
         row = cursor.fetchone()
         conn.close()
 
         bal = row[0] if row else 500
-        embed = discord.Embed(title="💰 محفظتك المالية", description=f"رصيدك الحالي هو: **{bal} نقطة**", color=discord.Color.green())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed = discord.Embed(
+            title="💰 الخزينة المالية الشخصية", 
+            description=f"رصيدك الحالي المتاح للاستثمار:\n# 💎 `{bal:,} نقطة`", 
+            color=0x2ECC71
+        )
+        embed.set_footer(text=f"بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
-    @app_commands.command(name="سوق_الأسهم", description="عرض رومات السيرفر وأسعار الأسهم فيها")
+    @app_commands.command(name="سوق_الأسهم", description="استعراض أسعار أسهم رومات السيرفر ونشاطها")
     async def stock_market(self, interaction: discord.Interaction):
-        conn = sqlite3.connect("serveros.db")
+        conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
         cursor.execute("SELECT channel_id, share_price, messages_count FROM channel_stocks WHERE guild_id = ?", (interaction.guild_id,))
         rows = cursor.fetchall()
         conn.close()
 
         if not rows:
-            await interaction.response.send_message("📈 لا توجد رومات مسجلة في سوق الأسهم حتى الآن. ابدأوا بالسوالف في الرومات!", ephemeral=True)
+            await interaction.response.send_message("📈 لا توجد رومات مسجلة في سوق الأسهم حتى الآن. ابدأوا بالتفاعل في الرومات!", ephemeral=True)
             return
 
-        description = ""
+        description = "إليك قائمة الرومات المتاحة للاستثمار وتداول الأسهم:\n\n"
         for ch_id, price, msgs in rows:
             channel = interaction.guild.get_channel(ch_id)
-            ch_name = channel.mention if channel else "روم محذوف"
-            description += f"📌 {ch_name} | سعر السهم: `💰 {price} نقطة` | التفاعل: `💬 {msgs} رسالة`\n"
+            ch_name = channel.mention if channel else "روم غير معروف"
+            description += f"📌 {ch_name}\n └ السعر: `💰 {price:,}` | التفاعل: `💬 {msgs} رسالة`\n\n"
 
-        embed = discord.Embed(title="📈 سوق أسهم السيرفر", description=description, color=discord.Color.blue())
-        await interaction.response.send_message(embed=embed)
+        embed = discord.Embed(title="📈 بورصة وسوق أسهم السيرفر", description=description, color=0x3498DB)
+        embed.set_footer(text=f"طلب بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+        
+        await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
-    @app_commands.command(name="شراء_سهم", description="شراء أسهم في روم معينة لاستلام أرباح")
+    @app_commands.command(name="شراء_سهم", description="شراء أسهم استثمارية في روم معينة لتحقيق أرباح")
     @app_commands.describe(channel="الروم المراد شراء أسهم فيها", amount="عدد الأسهم المراد شراؤها")
     async def buy_stock(self, interaction: discord.Interaction, channel: discord.TextChannel, amount: int):
         if amount <= 0:
-            await interaction.response.send_message("❌ يرجى تحديد عدد صحيح أكبر من صفر.", ephemeral=True)
+            await interaction.response.send_message("❌ عذراً، يجب تحديد عدد أسهم أكبر من الصفر.", ephemeral=True)
             return
 
-        conn = sqlite3.connect("serveros.db")
+        conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
 
-        # التأكد من وجود سهم للروم
         cursor.execute("SELECT share_price FROM channel_stocks WHERE guild_id = ? AND channel_id = ?", (interaction.guild.id, channel.id))
         row = cursor.fetchone()
         if not row:
             conn.close()
-            await interaction.response.send_message("❌ هذه الروم غير مسجلة في السوق بعد، دع الأعضاء يسولفون فيها أولاً!", ephemeral=True)
+            await interaction.response.send_message("❌ هذه الروم غير مدرجة في السوق بعد، دع الأعضاء يتفاعلون فيها أولاً!", ephemeral=True)
             return
 
         price_per_share = row[0]
         total_cost = price_per_share * amount
 
-        # فحص رصيد المستخدم
         cursor.execute("SELECT balance FROM user_wallet WHERE guild_id = ? AND user_id = ?", (interaction.guild.id, interaction.user.id))
         user_row = cursor.fetchone()
         user_balance = user_row[0] if user_row else 500
 
         if user_balance < total_cost:
             conn.close()
-            await interaction.response.send_message(f"❌ رصيدك غير كافي! تحتاج إلى **{total_cost} نقطة** وشراء {amount} سهم.", ephemeral=True)
+            await interaction.response.send_message(f"❌ رصيدك غير كافي! تكلفة شراء {amount} سهم هي **{total_cost:,} نقطة** بينما رصيدك **{user_balance:,} نقطة**.", ephemeral=True)
             return
 
-        # خصم الرصيد وتسجيل الأسهم
         cursor.execute("UPDATE user_wallet SET balance = balance - ? WHERE guild_id = ? AND user_id = ?", (total_cost, interaction.guild.id, interaction.user.id))
         cursor.execute("""
             INSERT INTO user_shares (guild_id, user_id, channel_id, shares_amount) VALUES (?, ?, ?, ?)
@@ -143,53 +171,110 @@ class ServerStocks(commands.Cog):
         conn.close()
 
         embed = discord.Embed(
-            title="✅ تمت عملية الشراء بنجاح",
-            description=f"لقد اشتريت **{amount} سهم** في الروم {channel.mention}\nتكلفة الشراء الإجمالية: **{total_cost} نقطة**",
-            color=discord.Color.gold()
+            title="✅ تمت عملية الاستثمار بنجاح",
+            description=f"لقد اشتريت **{amount:,} سهم** في الروم {channel.mention}\nإجمالي التكلفة المدفوعة: `💰 {total_cost:,} نقطة`",
+            color=0xF1C40F
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed.set_footer(text=f"بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
-    @app_commands.command(name="المستثمرين", description="عرض قائمة أغنى المستثمرين في السيرفر")
+    @app_commands.command(name="المستثمرين", description="عرض قائمة أثرياء وكبار المستثمرين في السيرفر")
     async def top_investors(self, interaction: discord.Interaction):
-        conn = sqlite3.connect("serveros.db")
+        conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
         cursor.execute("SELECT user_id, balance FROM user_wallet WHERE guild_id = ? ORDER BY balance DESC LIMIT 5", (interaction.guild.id,))
         rows = cursor.fetchall()
         conn.close()
 
         if not rows:
-            await interaction.response.send_message("🏆 لا يوجد مستثمرين حتى الآن.", ephemeral=True)
+            await interaction.response.send_message("🏆 لا يوجد مستثمرين مسجلين حتى الآن.", ephemeral=True)
             return
 
         description = ""
         for index, (user_id, balance) in enumerate(rows, start=1):
             member = interaction.guild.get_member(user_id)
-            name = member.mention if member else f"مستخدم #{user_id}"
+            name = member.display_name if member else f"مستخدم #{user_id}"
             medal = "👑" if index == 1 else "🥈" if index == 2 else "🥉" if index == 3 else "🔹"
-            description += f"{medal} **#{index}** {name} — الرصيد: `💰 {balance} نقطة`\n"
+            description += f"{medal} ** المركز #{index}** | **{name}** — الرصيد: `💰 {balance:,} نقطة`\n"
 
-        embed = discord.Embed(title="🏆 قائمة كبار المستثمرين بالسيرفر", description=description, color=discord.Color.purple())
-        await interaction.response.send_message(embed=embed)
+        embed = discord.Embed(title="🏆 قائمة أثرياء وكبار المستثمرين", description=description, color=0x9B59B6)
+        embed.set_footer(text=f"طلب بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+        
+        await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
-    @tasks.loop(minutes=30)
-    async def pay_dividends(self):
-        # مهمة تلقائية كل 30 دقيقة: ترتفع أسعار الأسهم وتوزع أرباح بناءً على تفاعل الرومات
-        conn = sqlite3.connect("serveros.db")
+    @app_commands.command(name="مستثمرين_الاسبوع", description="عرض أكثر الأعضاء تفاعلاً واستثماراً لهذا الأسبوع")
+    async def weekly_top_investors(self, interaction: discord.Interaction):
+        conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
+        cursor.execute("SELECT user_id, weekly_score FROM weekly_stats WHERE guild_id = ? ORDER BY weekly_score DESC LIMIT 5", (interaction.guild.id,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            await interaction.response.send_message("⭐ لا توجد إحصائيات أسبوعية مسجلة حتى الآن.", ephemeral=True)
+            return
+
+        description = "أبرز الشخصيات النشطة في السيرفر لهذا الأسبوع:\n\n"
+        for index, (user_id, score) in enumerate(rows, start=1):
+            member = interaction.guild.get_member(user_id)
+            name = member.display_name if member else f"مستخدم #{user_id}"
+            medal = "🔥" if index == 1 else "⭐" if index == 2 else "✨" if index == 3 else "🔹"
+            description += f"{medal} **#{index}** | **{name}** — التفاعل: `{score:,} نقطة نشاط`\n"
+
+        embed = discord.Embed(title="🌟 أساطير التفاعل والاستثمار الأسبوعي", description=description, color=0xE67E22)
+        embed.set_footer(text=f"تتحدث الإحصائيات أسبوعياً تلقائياً | طلب: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+
+        await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+    @app_commands.command(name="إدارة_السوق", description="[خاص بالإداريين] تصفير وتحديث إحصائيات السوق الأسبوعية")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    async def reset_market(self, interaction: discord.Interaction):
+        conn = sqlite3.connect("serveros_pro.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM weekly_stats WHERE guild_id = ?", (interaction.guild.id,))
+        conn.commit()
+        conn.close()
+
+        embed = discord.Embed(
+            title="⚙️ لوحة التحكم الإدارية",
+            description="✅ تم بنجاح تصفير سجلات التفاعل الأسبوعي وبدء دورة أسبوعية جديدة للمستثمرين.",
+            color=0xE74C3C
+        )
+        embed.set_footer(text=f"بإشراف الإداري: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+
+        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    @reset_market.error
+    async def reset_market_error(self, interaction: discord.Interaction, error):
+        if isinstance(error, app_commands.errors.MissingPermissions):
+            await interaction.response.send_message("❌ عذراً، هذا الأمر مخصص حصرياً للمشرفين والإداريين فقط.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ حدث خطأ أثناء تنفيذ الأمر الإداري.", ephemeral=True)
+
+    @tasks.loop(hours=168)
+    async def pay_dividends(self):
+        conn = sqlite3.connect("serveros_pro.db")
+        cursor = conn.cursor()
+        
         cursor.execute("SELECT guild_id, channel_id, messages_count FROM channel_stocks")
         channels = cursor.fetchall()
 
         for guild_id, channel_id, msgs in channels:
-            # تعديل سعر السهم بناءً على عدد الرسائل الجديدة
-            new_price = max(50, 100 + (msgs * 5))
+            new_price = max(50, 100 + (msgs * 2))
             cursor.execute("UPDATE channel_stocks SET share_price = ?, messages_count = 0 WHERE guild_id = ? AND channel_id = ?", (new_price, guild_id, channel_id))
 
-            # توزيع أرباح لمن يملك أسهم في هذه الروم
             cursor.execute("SELECT user_id, shares_amount FROM user_shares WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id))
             holders = cursor.fetchall()
             for user_id, shares in holders:
-                profit = shares * int(new_price * 0.1)  # ربح 10% من قيمة السهم للمستثمر
+                profit = shares * int(new_price * 0.15)
                 cursor.execute("UPDATE user_wallet SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (profit, guild_id, user_id))
+
+        cursor.execute("DELETE FROM weekly_stats")
 
         conn.commit()
         conn.close()
