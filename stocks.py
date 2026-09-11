@@ -56,6 +56,16 @@ class ServerStocks(commands.Cog):
                 PRIMARY KEY (guild_id, user_id)
             )
         """)
+
+        # جدول إعدادات رتب السوق لكل سيرفر
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS market_roles (
+                guild_id INTEGER PRIMARY KEY,
+                investor_role_id INTEGER,
+                top3_role_id INTEGER,
+                king_role_id INTEGER
+            )
+        """)
         
         conn.commit()
         conn.close()
@@ -86,8 +96,20 @@ class ServerStocks(commands.Cog):
             ON CONFLICT(guild_id, user_id) DO UPDATE SET weekly_score = weekly_score + 1
         """, (message.guild.id, message.author.id))
 
+        # 4. منح رتبة "مستثمر" العامة تلقائياً لمن يرسل رسالة (إن وجدت مضافة في الإعدادات)
+        cursor.execute("SELECT investor_role_id FROM market_roles WHERE guild_id = ?", (message.guild.id,))
+        role_row = cursor.fetchone()
+        
         conn.commit()
         conn.close()
+
+        if role_row and role_row[0]:
+            role = message.guild.get_role(role_row[0])
+            if role and role not in message.author.roles:
+                try:
+                    await message.author.add_roles(role, reason="التفاعل في السيرفر والحصول على رتبة مستثمر")
+                except Exception:
+                    pass
 
     @app_commands.command(name="رصيدي", description="عرض رصيدك الحالي من النقاط في الخزينة الملكية")
     async def balance(self, interaction: discord.Interaction):
@@ -230,6 +252,52 @@ class ServerStocks(commands.Cog):
 
         await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
+    @app_commands.command(name="إعداد_رتب_السوق", description="[خاص بالإداريين] تحديد رتب المستثمرين والرتب الخاصة بأوائل الأسبوع")
+    @app_commands.describe(
+        rطبة_مستثمر="الرتبة التي تُمنح لأي شخص يتفاعل بالرسائل",
+        رتبة_مستثمر_كبير="الرتبة التي تُمنح لأكبر 3 مستثمرين بالأسبوع",
+        رتبة_ملك_المستثمرين="الرتبة الخاصة بالمركز الأول (ملك المستثمرين)"
+    )
+    @app_commands.checks.has_permissions(moderate_members=True)
+    async def set_market_roles(self, interaction: discord.Interaction, رطبة_مستثمر: discord.Role = None, رتبة_مستثمر_كبير: discord.Role = None, رتبة_ملك_المستثمرين: discord.Role = None):
+        conn = sqlite3.connect("serveros_pro.db")
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT investor_role_id, top3_role_id, king_role_id FROM market_roles WHERE guild_id = ?", (interaction.guild.id,))
+        existing = cursor.fetchone()
+
+        inv_id = رطبة_مستثمر.id if رطبة_مستثمر else (existing[0] if existing else None)
+        top3_id = رتبة_مستثمر_كبير.id if رتبة_مستثمر_كبير else (existing[1] if existing else None)
+        king_id = رتبة_ملك_المستثمرين.id if رتبة_ملك_المستثمرين else (existing[2] if existing else None)
+
+        cursor.execute("""
+            INSERT INTO market_roles (guild_id, investor_role_id, top3_role_id, king_role_id) VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET investor_role_id = ?, top3_role_id = ?, king_role_id = ?
+        """, (interaction.guild.id, inv_id, top3_id, king_id, inv_id, top3_id, king_id))
+
+        conn.commit()
+        conn.close()
+
+        embed = discord.Embed(
+            title="⚙️ إعدادات رتب السوق والتمويل",
+            description="✅ تم حفظ وتحديث رتب السوق بنجاح:\n\n"
+                        f"• رتبة المتفاعل العادي: {rطبة_مستثمر.mention if رطبة_مستثمر else 'لم تُتغير'}\n"
+                        f"• رتبة أكبر 3 مستثمرين: {رتبة_مستثمر_كبير.mention if رتبة_مستثمر_كبير else 'لم تُتغير'}\n"
+                        f"• رتبة ملك المستثمرين (#1): {رتبة_ملك_المستثمرين.mention if رتبة_ملك_المستثمرين else 'لم تُتغير'}",
+            color=0x2ECC71
+        )
+        embed.set_footer(text=f"بإشراف الإداري: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+
+        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    @set_market_roles.error
+    async def set_market_roles_error(self, interaction: discord.Interaction, error):
+        if isinstance(error, app_commands.errors.MissingPermissions):
+            await interaction.response.send_message("❌ عذراً، هذا الأمر مخصص حصرياً للمشرفين والإداريين فقط.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ حدث خطأ أثناء تنفيذ الأمر الإداري.", ephemeral=True)
+
     @app_commands.command(name="إدارة_السوق", description="[خاص بالإداريين] تصفير وتحديث إحصائيات السوق الأسبوعية")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def reset_market(self, interaction: discord.Interaction):
@@ -261,6 +329,7 @@ class ServerStocks(commands.Cog):
         conn = sqlite3.connect("serveros_pro.db")
         cursor = conn.cursor()
         
+        # 1. تحديث أسعار الأسهم وأرباح الرومات
         cursor.execute("SELECT guild_id, channel_id, messages_count FROM channel_stocks")
         channels = cursor.fetchall()
 
@@ -274,6 +343,63 @@ class ServerStocks(commands.Cog):
                 profit = shares * int(new_price * 0.15)
                 cursor.execute("UPDATE user_wallet SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (profit, guild_id, user_id))
 
+        # 2. منح وتنظيم رتب الأسبوع وتحديثها بناءً على الأرصدة والتفاعل الأسبوعي
+        cursor.execute("SELECT DISTINCT guild_id FROM weekly_stats")
+        guilds = cursor.fetchall()
+
+        for (guild_id,) in guilds:
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                continue
+
+            cursor.execute("SELECT top3_role_id, king_role_id FROM market_roles WHERE guild_id = ?", (guild_id,))
+            role_row = cursor.fetchone()
+            if not role_row:
+                continue
+
+            top3_role_id, king_role_id = role_row
+            top3_role = guild.get_role(top3_role_id) if top3_role_id else None
+            king_role = guild.get_role(king_role_id) if king_role_id else None
+
+            # سحب الرتب القديمة من الأعضاء لتحديثها بالأسبوع الجديد
+            if top3_role:
+                for member in top3_role.members:
+                    try:
+                        await member.remove_roles(top3_role)
+                    except Exception:
+                        pass
+            if king_role:
+                for member in king_role.members:
+                    try:
+                        await member.remove_roles(king_role)
+                    except Exception:
+                        pass
+
+            # جلب أعلى 3 مستثمرين/أعضاء لهذا الأسبوع
+            cursor.execute("SELECT user_id FROM weekly_stats WHERE guild_id = ? ORDER BY weekly_score DESC LIMIT 3", (guild_id,))
+            top_users = cursor.fetchall()
+
+            for index, (uid,) in enumerate(top_users):
+                member = guild.get_member(uid)
+                if not member:
+                    continue
+                
+                # الأول يحصل على رتبة ملك المستثمرين ورتبة مستثمر كبير
+                if index == 0:
+                    if king_role:
+                        try:
+                            await member.add_roles(king_role)
+                        except Exception:
+                            pass
+                
+                # الأول والثاني والثالث يحصلون على رتبة مستثمر كبير
+                if top3_role:
+                    try:
+                        await member.add_roles(top3_role)
+                    except Exception:
+                        pass
+
+        # تصفير النشاط الأسبوعي لبدء أسبوع جديد
         cursor.execute("DELETE FROM weekly_stats")
 
         conn.commit()
