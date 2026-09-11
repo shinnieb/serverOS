@@ -9,56 +9,62 @@ class MatchView(discord.ui.View):
         super().__init__(timeout=timeout_seconds)
         self.p1 = p1
         self.p2 = p2
-        self.votes_p1 = set()
-        self.votes_p2 = set()
+        self.votes_p1 = {}  # {user_id: display_name}
+        self.votes_p2 = {}  # {user_id: display_name}
         self.message = None
 
     @discord.ui.button(label="", style=discord.ButtonStyle.success, emoji="🟢")
     async def vote_p1(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
+        user_name = interaction.user.display_name
+
         if user_id in self.votes_p2:
-            self.votes_p2.remove(user_id)
+            del self.votes_p2[user_id]
         
         if user_id in self.votes_p1:
-            self.votes_p1.remove(user_id)
+            del self.votes_p1[user_id]
             await interaction.response.send_message("❌ تم إلغاء صوتك لصالح الطرف الأول.", ephemeral=True)
         else:
-            self.votes_p1.add(user_id)
+            self.votes_p1[user_id] = user_name
             await interaction.response.send_message(f"✅ تم تسجيل صوتك بنجاح لصالح: **{self.p1}**", ephemeral=True)
         
-        await self.update_embed(interaction)
+        await self.update_embed()
 
     @discord.ui.button(label="", style=discord.ButtonStyle.danger, emoji="🔴")
     async def vote_p2(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
+        user_name = interaction.user.display_name
+
         if user_id in self.votes_p1:
-            self.votes_p1.remove(user_id)
+            del self.votes_p1[user_id]
         
         if user_id in self.votes_p2:
-            self.votes_p2.remove(user_id)
+            del self.votes_p2[user_id]
             await interaction.response.send_message("❌ تم إلغاء صوتك لصالح الطرف الثاني.", ephemeral=True)
         else:
-            self.votes_p2.add(user_id)
+            self.votes_p2[user_id] = user_name
             await interaction.response.send_message(f"✅ تم تسجيل صوتك بنجاح لصالح: **{self.p2}**", ephemeral=True)
         
-        await self.update_embed(interaction)
+        await self.update_embed()
 
-    async def update_embed(self, interaction: discord.Interaction):
-        if not self.message and interaction.message:
-            self.message = interaction.message
-            
+    async def update_embed(self):
         if self.message:
             try:
                 embed = self.message.embeds[0]
-                for i, field in enumerate(embed.fields):
-                    if "أصوات" in field.name or "طرفي" in field.name or "النتيجة" in field.name:
-                        embed.set_field_at(
-                            i,
-                            name="🏟️ أطراف المواجهة والأصوات الحالية:",
-                            value=f"🟢 **{self.p1}** (الأصوات: `{len(self.votes_p1)}`)\n*ضد*\n🔴 **{self.p2}** (الأصوات: `{len(self.votes_p2)}`)",
-                            inline=False
-                        )
-                        break
+                
+                voters_p1_str = ", ".join(self.votes_p1.values()) if self.votes_p1 else "لا توجد أصوات بعد"
+                voters_p2_str = ", ".join(self.votes_p2.values()) if self.votes_p2 else "لا توجد أصوات بعد"
+
+                description = (
+                    f"معركة حامية الوطيس! باب التصويت مفتوح لجميع الحضور.\n\n"
+                    f"🟢 **{self.p1}** (الأصوات: `{len(self.votes_p1)}`)\n"
+                    f"└ المصوتون: {voters_p1_str}\n\n"
+                    f"🔴 **{self.p2}** (الأصوات: `{len(self.votes_p2)}`)\n"
+                    f"└ المصوتون: {voters_p2_str}\n\n"
+                    f"⏱️ **الحالة:** التصويت جاري..."
+                )
+                
+                embed.description = description
                 await self.message.edit(embed=embed, view=self)
             except Exception:
                 pass
@@ -91,9 +97,8 @@ class MatchView(discord.ui.View):
 class DynamicBracketView(discord.ui.View):
     def __init__(self, matches_list, hours):
         super().__init__(timeout=hours * 3600)
-        self.matches_list = matches_list # قائمة تحتوي على ثنائيات المباريات
+        self.matches_list = matches_list
         
-        # إضافة زر لكل مباراة بشكل ديناميكي مهما كان عددها!
         for index, (p1, p2) in enumerate(matches_list):
             button = discord.ui.Button(
                 label=f"مباراة {index+1}: {p1} vs {p2}", 
@@ -101,21 +106,23 @@ class DynamicBracketView(discord.ui.View):
                 emoji="⚔️",
                 custom_id=f"match_{index}"
             )
-            button.callback = self.create_match_callback(p1, p2, index + 1)
+            button.callback = self.create_match_callback(p1, p2, index + 1, hours)
             self.add_item(button)
 
-    def create_match_callback(self, p1, p2, match_num):
+    def create_match_callback(self, p1, p2, match_num, hours):
         async def callback(interaction: discord.Interaction):
-            view = MatchView(p1, p2, f"المباراة رقم {match_num} من الشجرة", 3600)
+            timeout_seconds = hours * 3600
+            view = MatchView(p1, p2, f"المباراة رقم {match_num} من الشجرة", timeout_seconds)
             view.children[0].label = p1
             view.children[1].label = p2
             
             embed = discord.Embed(
                 title=f"⚔️ حلبة التحدي | المباراة ({match_num})", 
-                description=f"🟢 **{p1}** (الأصوات: `0`)\n*ضد*\n🔴 **{p2}** (الأصوات: `0`)", 
+                description=f"معركة حامية الوطيس! باب التصويت مفتوح لجميع الحضور.\n\n🟢 **{p1}** (الأصوات: `0`)\n└ المصوتون: لا توجد أصوات بعد\n\n🔴 **{p2}** (الأصوات: `0`)\n└ المصوتون: لا توجد أصوات بعد\n\n⏱️ **مدة التصويت المحددة:** {hours} ساعة!", 
                 color=0xF1C40F
             )
             embed.set_footer(text=f"بإشراف: {interaction.user.display_name}")
+            embed.timestamp = discord.utils.utcnow()
             
             msg = await interaction.channel.send(embed=embed, view=view)
             view.message = msg
@@ -242,7 +249,11 @@ class Fun(commands.Cog):
         view.children[0].label = member1
         view.children[1].label = member2
 
-        embed = discord.Embed(title=f"⚔️ حلبة التحدي والتصفيات | {round_title}", description=f"معركة حامية الوطيس! باب التصويت مفتوح لجميع الحضور.\n🟢 **{member1}** (الأصوات: `0`)\n*ضد*\n🔴 **{member2}** (الأصوات: `0`)\n\n⏱️ **مدة التصويت المحددة:** {hours} ساعة!", color=0xF1C40F)
+        embed = discord.Embed(
+            title=f"⚔️ حلبة التحدي والتصفيات | {round_title}", 
+            description=f"معركة حامية الوطيس! باب التصويت مفتوح لجميع الحضور.\n\n🟢 **{member1}** (الأصوات: `0`)\n└ المصوتون: لا توجد أصوات بعد\n\n🔴 **{member2}** (الأصوات: `0`)\n└ المصوتون: لا توجد أصوات بعد\n\n⏱️ **مدة التصويت المحددة:** {hours} ساعة!", 
+            color=0xF1C40F
+        )
         embed.set_footer(text=f"بإشراف: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
         embed.timestamp = discord.utils.utcnow()
 
@@ -264,21 +275,18 @@ class Fun(commands.Cog):
     )
     @app_commands.checks.has_permissions(moderate_members=True)
     async def bracket(self, interaction: discord.Interaction, participants: str, hours: float = 24.0):
-        # تقسيم الأسماء المدخلة عن طريق الفاصلة وتنظيف المسافات
         names = [name.strip() for name in participants.split(",") if name.strip()]
         
         if len(names) < 2:
             await interaction.response.send_message("❌ يجب إدخال اسمين على الأقل لتشكيل المواجهات!", ephemeral=True)
             return
 
-        # خلط الأسماء عشوائياً لتشكيل المواجهات
         random.shuffle(names)
         
         matches = []
         for i in range(0, len(names) - 1, 2):
             matches.append((names[i], names[i+1]))
         
-        # إذا كان العدد فردي، الأخير يصعد تلقائياً أو يتم تنبيهه
         extra_person = names[-1] if len(names) % 2 != 0 else None
 
         view = DynamicBracketView(matches, hours)
