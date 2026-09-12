@@ -27,21 +27,12 @@ class ServerOSBot(commands.Bot):
                 except Exception as e:
                     print(f"فشل تحميل الملف {cog_name}: {e}")
 
-        # مزامنة عامة أولية للبوت
+        # مزامنة عامة للبوت
         try:
             await self.tree.sync()
             print("تمت مزامنة الأوامر العامة بنجاح!")
         except Exception as e:
             print(f"فشل في المزامنة: {e}")
-
-    # هذي الدالة هي سر سرعة ProBot: أول ما يدخل البوت أي سيرفر، يفرز الأوامر فيه فوراً
-    async def on_guild_join(self, guild):
-        try:
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            print(f"تمت مزامنة الأوامر فوراً للسيرفر الجديد: {guild.name}")
-        except Exception as e:
-            print(f"فشل مزامنة السيرفر الجديد: {e}")
 
     async def on_ready(self):
         print(f"البوت جاهز ويعمل باسم : {self.user}")
